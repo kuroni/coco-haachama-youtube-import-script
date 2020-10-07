@@ -1,6 +1,37 @@
 import argparse
-import csv
 import requests
+import urllib
+import json
+import random
+
+
+def get_all_video_in_channel(channel_id, api_key):
+    base_video_url = 'https://www.youtube.com/watch?v='
+    base_search_url = 'https://www.googleapis.com/youtube/v3/search?'
+
+    first_url = base_search_url+'key={}&channelId={}&part=snippet,id&order=date&maxResults=25'.format(api_key, channel_id)
+
+    video_links = []
+    url = first_url
+    while True:
+        try:
+            inp = urllib.request.urlopen(url).read()
+            resp = json.loads(inp.decode('utf-8'))
+        except Exception as inst:
+            print(inst)
+            exit(0)
+
+        for i in resp['items']:
+            if i['id']['kind'] == "youtube#video":
+                video_links.append((base_video_url + i['id']['videoId'])[32:45])
+
+        try:
+            next_page_token = resp['nextPageToken']
+            url = first_url + '&pageToken={}'.format(next_page_token)
+        except:
+            break
+    return video_links
+
 
 def auth(username, password, server):
     print(username)
@@ -9,46 +40,27 @@ def auth(username, password, server):
     print(res.text)
     return res.json()
 
-def write_fail_csv(entries, path):
-    with open(path, 'w') as csv_f:
-        csv_w = csv.writer(csv_f, delimiter=',')
-        csv_w.writerows(entries)
 
-
-def parse_csv(csv_path, server, authkey, dry_run=False):
-    i = 0
-    entrynames = []
+def send_all_entries(channel_id, api_key, server, authkey, dry_run=False):
+    links = get_all_video_in_channel(channel_id, api_key)
+    random.shuffle(links)
     failed_entries = []
-    with open(csv_path) as csv_f:
-        csv_r = csv.reader(csv_f, delimiter=',')
-        for row in csv_r:
-            if i > 0:
-                # Print dry run results if no server address
-                if not server:
-                    dry_run = True
-                    server = '0.0.0.0'
-                res_code, postdata = send_entry(
-                    server, row, entrynames, dry_run, authkey)
-                if res_code != 200 and res_code != 201:  # STATUS CODE not OK
-                    row.extend([postdata, res_code])
-                    failed_entries.append(row)
-            else:
-                entrynames = row
-                #row.extend(['postdata', 'response code'])
-                #failed_entries.append(row)
-                i += 1
+    for link in links:
+        # Print dry run results if no server address
+        if not server:
+            dry_run = True
+            server = '0.0.0.0'
+        res_code, postdata = send_entry(
+            server, link, dry_run, authkey)
+        if res_code != 200 and res_code != 201:  # STATUS CODE not OK
+            failed_entries.append([postdata, res_code])
     return failed_entries
 
 
-def send_entry(server, entry, entrynames, dry_run, authkey):
+def send_entry(server, entry, dry_run, authkey):
     url = server
     postdata = {
-        #entrynames[0]: str(entry[0]),
-        entrynames[1]: str(entry[1]),
-        entrynames[2]: str(entry[2]),
-        entrynames[3]: str(entry[3]),
-        entrynames[4]: str(entry[4])
-        #TODO: Add a way to specify the columns we are sending. Sometimes the server will complain if we send an undefined column
+        'archiveURL': entry
     }
     if not dry_run:
         #auth_headers = "Authorization: JWT " + authkey['access_token']
@@ -71,33 +83,27 @@ def main(argv):
               "Only printing results locally. Use the -h arg if you don't "
               "know what this means.\n")
     authkey = auth(argv.auth_username, argv.auth_password, argv.auth_api)
-    failed_entries = parse_csv(
-        argv.csv_path, argv.server_address, authkey, argv.dry_run)
+    failed_entries = send_all_entries(
+        argv.channel_id, argv.api_key, argv.server_address, authkey, argv.dry_run)
 
     total_failed_entries = len(failed_entries)
     if total_failed_entries > 1:
         print(
-            "\nTHERE WERE {} ENTRIES THAT FAILED TO BE PROCESSED. "
-            "PLEASE SEE \"{}\" TO DETERMINE IF THERE'S ANY DATA REMEDIATION "
-            "THAT'S NEEDED.\n".format(
-                total_failed_entries, argv.fail_csv_path))
-        write_fail_csv(failed_entries, argv.fail_csv_path)
+            "\nTHERE WERE {} ENTRIES THAT FAILED TO BE PROCESSED.\n".format(
+                total_failed_entries))
+        print(failed_entries)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description='Parse a specifically formatted CSV')
+        description='Pull YouTube video links from channel')
     parser.add_argument(
-        '--csv_path', '-c', dest='csv_path', required=True,
-        help='the path to the csv file')
+        '--channel[id', '-c', dest='channel_id', required=True,
+        help='the channel id')
     parser.add_argument(
         '--dry_run', '-d', dest='dry_run', action='store_true',
         help='performs a dry run locally when provided with a '
         'server_address')
-    parser.add_argument(
-        '--fail_csv_path', '-f', dest='fail_csv_path',
-        default='./failed_entires.csv',
-        help='the path to drop a csv with failed entries')
     parser.add_argument(
         '--server', '-s', dest='server_address', required=False,
         help='the server address for the results to be uploaded')
@@ -110,5 +116,8 @@ if __name__ == "__main__":
     parser.add_argument(
         '--auth', '-a', dest='auth_api', required=True,
         help='the auth api')
+    parser.add_argument(
+        '--youtube-api', '-y', dest='api_key', required=True,
+        help='the youtube API key')
     args = parser.parse_args()
     main(args)
